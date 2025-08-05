@@ -1,4 +1,4 @@
-name: Check Latest Maintenance Release
+name: Check & Create PR from Maintenance Branch
 
 on:
   schedule:
@@ -6,42 +6,56 @@ on:
   workflow_dispatch:
 
 jobs:
-  check-latest-maintenance:
+  check-and-create-pr:
     runs-on: ubuntu-latest
     steps:
-      - name: Git konfigurieren & Repository clonen
+      - name: Git & GitHub CLI installieren und konfigurieren
+        id: detect
         run: |
+          sudo apt-get install -y gh
           git clone https://github.com/${{ github.repository }} repo
           cd repo
 
-          # Alle Remote-Branches holen
+          git config --global user.email "action@github.com"
+          git config --global user.name "GitHub Action"
+
           git fetch --all
 
-          # Alle Branches mit maintenance-release-* filtern
+          # Maintenance-Branches finden
           BRANCHES=$(git branch -r | grep 'origin/maintenance-release-' | sed 's|origin/||')
 
-          echo "🔎 Gefundene Maintenance-Branches:"
+          echo "Gefundene Branches:"
           echo "$BRANCHES"
 
-          # Die größte Release-Nummer extrahieren
           MAX_BRANCH=$(echo "$BRANCHES" | sed -E 's/.*release-([0-9]+)/\1 \0/' | sort -n | tail -1 | awk '{print $2}')
 
           if [ -z "$MAX_BRANCH" ]; then
-            echo "❌ Kein Maintenance-Release-Branch gefunden. Abbruch."
+            echo "Kein Maintenance-Branch gefunden."
             exit 0
           fi
 
-          echo "📌 Aktuellster Branch: $MAX_BRANCH"
+          echo "branch=$MAX_BRANCH" >> $GITHUB_OUTPUT
 
-          git fetch origin main
-          git fetch origin "$MAX_BRANCH"
+          # Prüfen, ob Commits in maintenance-release-X sind, die nicht in main sind
+          COMMITS=$(git log origin/main..origin/$MAX_BRANCH --oneline)
 
-          COMMITS=$(git log origin/main.."origin/$MAX_BRANCH" --oneline)
-
-          if [ -n "$COMMITS" ]; then
-            echo "⚠️ Änderungen in '$MAX_BRANCH', die nicht in 'main' sind:"
-            echo "$COMMITS"
-            echo "::notice title=Unmerged Commits::Commits in $MAX_BRANCH sind noch nicht in main."
+          if [ -z "$COMMITS" ]; then
+            echo "Keine ungemergten Commits – kein PR notwendig."
+            echo "changes=false" >> $GITHUB_OUTPUT
           else
-            echo "✅ '$MAX_BRANCH' ist vollständig in main enthalten."
+            echo "Ungemergte Commits gefunden:"
+            echo "$COMMITS"
+            echo "changes=true" >> $GITHUB_OUTPUT
           fi
+
+      - name: PR erstellen mit gh CLI
+        if: ${{ steps.detect.outputs.changes == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --head "${{ steps.detect.outputs.branch }}" \
+            --base "main" \
+            --title "🔀 Merge ${{ steps.detect.outputs.branch }} into main" \
+            --body "Es wurden Änderungen im Branch \`${{ steps.detect.outputs.branch }}\` gefunden, die noch nicht in \`main\` enthalten sind. Dieser PR wurde automatisch erstellt." \
+            --repo ${{ github.repository }}

@@ -1,31 +1,47 @@
-name: Check Maintenance Branch Merge Status
+name: Check Latest Maintenance Release
 
 on:
   schedule:
-    - cron: '0 9 * * 1' # Jeden Montag um 09:00 Uhr UTC
-  workflow_dispatch: # Zum manuellen Ausführen
+    - cron: '0 9 * * 1' # Jeden Montag
+  workflow_dispatch:
 
 jobs:
-  check-unmerged-commits:
+  check-latest-maintenance:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout main branch
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # WICHTIG: vollständige Git-Historie
-
-      - name: Check for unmerged commits
+      - name: Git konfigurieren & Repository clonen
         run: |
-          git fetch origin maintenance-april
+          git clone https://github.com/${{ github.repository }} repo
+          cd repo
 
-          # Liste der Commits in maintenance-april, die NICHT in main sind
-          COMMITS=$(git log origin/main..origin/maintenance-april --oneline)
+          # Alle Remote-Branches holen
+          git fetch --all
+
+          # Alle Branches mit maintenance-release-* filtern
+          BRANCHES=$(git branch -r | grep 'origin/maintenance-release-' | sed 's|origin/||')
+
+          echo "🔎 Gefundene Maintenance-Branches:"
+          echo "$BRANCHES"
+
+          # Die größte Release-Nummer extrahieren
+          MAX_BRANCH=$(echo "$BRANCHES" | sed -E 's/.*release-([0-9]+)/\1 \0/' | sort -n | tail -1 | awk '{print $2}')
+
+          if [ -z "$MAX_BRANCH" ]; then
+            echo "❌ Kein Maintenance-Release-Branch gefunden. Abbruch."
+            exit 0
+          fi
+
+          echo "📌 Aktuellster Branch: $MAX_BRANCH"
+
+          git fetch origin main
+          git fetch origin "$MAX_BRANCH"
+
+          COMMITS=$(git log origin/main.."origin/$MAX_BRANCH" --oneline)
 
           if [ -n "$COMMITS" ]; then
-            echo "⚠️ Es gibt Änderungen in 'maintenance-april', die noch nicht in 'main' sind:"
+            echo "⚠️ Änderungen in '$MAX_BRANCH', die nicht in 'main' sind:"
             echo "$COMMITS"
-
-            echo "::notice title=Unmerged Commits Detected::Es gibt ungemergte Änderungen von 'maintenance-april' nach 'main'."
+            echo "::notice title=Unmerged Commits::Commits in $MAX_BRANCH sind noch nicht in main."
           else
-            echo "✅ Keine ungemergten Änderungen von 'maintenance-april' nach 'main'."
+            echo "✅ '$MAX_BRANCH' ist vollständig in main enthalten."
           fi

@@ -1,0 +1,31 @@
+name: Check Maintenance Branch Merge Status
+
+on:
+  schedule:
+    - cron: '0 9 * * 1' # Jeden Montag um 09:00 Uhr UTC
+  workflow_dispatch: # Zum manuellen Ausführen
+
+jobs:
+  check-unmerged-commits:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # WICHTIG: vollständige Git-Historie
+
+      - name: Check for unmerged commits
+        run: |
+          git fetch origin maintenance-april
+
+          # Liste der Commits in maintenance-april, die NICHT in main sind
+          COMMITS=$(git log origin/main..origin/maintenance-april --oneline)
+
+          if [ -n "$COMMITS" ]; then
+            echo "⚠️ Es gibt Änderungen in 'maintenance-april', die noch nicht in 'main' sind:"
+            echo "$COMMITS"
+
+            echo "::notice title=Unmerged Commits Detected::Es gibt ungemergte Änderungen von 'maintenance-april' nach 'main'."
+          else
+            echo "✅ Keine ungemergten Änderungen von 'maintenance-april' nach 'main'."
+          fi

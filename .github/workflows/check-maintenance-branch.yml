@@ -1,4 +1,4 @@
-name: Check & Create PR from Maintenance Branch
+name: Maintenance Check & Create Issue (ohne externe Actions)
 
 on:
   schedule:
@@ -6,13 +6,12 @@ on:
   workflow_dispatch:
 
 jobs:
-  check-and-create-pr:
+  check-and-create-issue:
     runs-on: ubuntu-latest
     steps:
-      - name: Git & GitHub CLI installieren und konfigurieren
+      - name: Repository klonen & Maintenance-Branch finden
         id: detect
         run: |
-          sudo apt-get install -y gh
           git clone https://github.com/${{ github.repository }} repo
           cd repo
 
@@ -21,41 +20,35 @@ jobs:
 
           git fetch --all
 
-          # Maintenance-Branches finden
           BRANCHES=$(git branch -r | grep 'origin/maintenance-release-' | sed 's|origin/||')
-
           echo "Gefundene Branches:"
           echo "$BRANCHES"
 
           MAX_BRANCH=$(echo "$BRANCHES" | sed -E 's/.*release-([0-9]+)/\1 \0/' | sort -n | tail -1 | awk '{print $2}')
-
-          if [ -z "$MAX_BRANCH" ]; then
-            echo "Kein Maintenance-Branch gefunden."
-            exit 0
-          fi
-
           echo "branch=$MAX_BRANCH" >> $GITHUB_OUTPUT
 
-          # Prüfen, ob Commits in maintenance-release-X sind, die nicht in main sind
+          git fetch origin main
           COMMITS=$(git log origin/main..origin/$MAX_BRANCH --oneline)
 
           if [ -z "$COMMITS" ]; then
-            echo "Keine ungemergten Commits – kein PR notwendig."
+            echo "✅ Keine ungemergten Änderungen"
             echo "changes=false" >> $GITHUB_OUTPUT
           else
-            echo "Ungemergte Commits gefunden:"
-            echo "$COMMITS"
+            echo "⚠️ Ungemergte Änderungen vorhanden"
             echo "changes=true" >> $GITHUB_OUTPUT
           fi
 
-      - name: PR erstellen mit gh CLI
+      - name: GitHub Issue erstellen (via REST API)
         if: ${{ steps.detect.outputs.changes == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh pr create \
-            --head "${{ steps.detect.outputs.branch }}" \
-            --base "main" \
-            --title "🔀 Merge ${{ steps.detect.outputs.branch }} into main" \
-            --body "Es wurden Änderungen im Branch \`${{ steps.detect.outputs.branch }}\` gefunden, die noch nicht in \`main\` enthalten sind. Dieser PR wurde automatisch erstellt." \
-            --repo ${{ github.repository }}
+          REPO="${{ github.repository }}"
+          BRANCH="${{ steps.detect.outputs.branch }}"
+          TITLE="🛠 Ungemergte Änderungen in $BRANCH"
+          BODY="Es wurden Änderungen im Branch \`$BRANCH\` gefunden, die noch nicht in \`main\` enthalten sind.\n\nBitte überprüfe, ob ein Merge oder ein Pull Request notwendig ist.\n\n_This issue was automatically created._"
+
+          curl -X POST "https://api.github.com/repos/${REPO}/issues" \
+            -H "Authorization: token ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -d "$(jq -n --arg title "$TITLE" --arg body "$BODY" '{title: $title, body: $body, labels: ["maintenance", "automated"]}')"

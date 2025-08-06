@@ -1,5 +1,8 @@
 name: Maintenance Check & Create Issue (ohne externe Actions)
 
+permissions:
+  issues: write
+
 on:
   schedule:
     - cron: '0 9 * * 1' # Jeden Montag

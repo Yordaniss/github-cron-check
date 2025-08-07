@@ -2,11 +2,11 @@ name: Maintenance Branch Checker
 
 on:
   schedule:
-    - cron: "0 9 * * MON" # jeden Montag 09:00 UTC
+    - cron: "0 9 * * MON" # jeden Montag um 09:00 UTC
   workflow_dispatch:
     inputs:
       target_branch:
-        description: 'Maintenance branch to check'
+        description: 'Maintenance branch to check (leave empty for latest)'
         required: false
         default: ''
       base_branch:
@@ -17,50 +17,49 @@ on:
         description: 'Create an issue if changes are found?'
         required: false
         default: 'true'
-        
-permissions:
-  issues: write
-  contents: read
 
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
       - name: Install GitHub CLI
         run: |
           sudo apt-get update
           sudo apt-get install -y gh
 
-      - name: Set parameters based on trigger
-        id: set-params
-        run: |
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            echo "TARGET_BRANCH=maintenance-release-3" >> $GITHUB_ENV
-            echo "BASE_BRANCH=main" >> $GITHUB_ENV
-            echo "CREATE_ISSUE=true" >> $GITHUB_ENV
-            echo "TRIGGER=cron" >> $GITHUB_ENV
-          else
-            echo "TARGET_BRANCH=${{ github.event.inputs.target_branch || 'maintenance-release-3' }}" >> $GITHUB_ENV
-            echo "BASE_BRANCH=${{ github.event.inputs.base_branch || 'main' }}" >> $GITHUB_ENV
-            echo "CREATE_ISSUE=${{ github.event.inputs.create_issue || 'true' }}" >> $GITHUB_ENV
-            echo "TRIGGER=manual" >> $GITHUB_ENV
-          fi
-
-      - name: Show parameters
-        run: |
-          echo "Trigger: $TRIGGER"
-          echo "Target branch: $TARGET_BRANCH"
-          echo "Base branch: $BASE_BRANCH"
-          echo "Create issue: $CREATE_ISSUE"
-
-      - name: Run maintenance branch check
+      - name: Determine branches and check for differences
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          git fetch origin "$TARGET_BRANCH" "$BASE_BRANCH"
+          BASE_BRANCH="${{ github.event.inputs.base_branch || 'main' }}"
+          CREATE_ISSUE="${{ github.event.inputs.create_issue || 'true' }}"
+
+          # Repo klonen
+          git clone --quiet "https://github.com/${{ github.repository }}" repo
+          cd repo
+
+          git fetch --all
+
+          if [[ "${{ github.event_name }}" == "schedule" && -z "${{ github.event.inputs.target_branch }}" ]]; then
+            # Alle maintenance-release-* Branches finden
+            BRANCHES=$(git branch -r | grep 'origin/maintenance-release-' | sed 's|origin/||')
+
+            if [ -z "$BRANCHES" ]; then
+              echo "❌ Kein Maintenance-Release-Branch gefunden."
+              exit 0
+            fi
+
+            # Höchsten Release ermitteln
+            TARGET_BRANCH=$(echo "$BRANCHES" | sed -E 's/.*release-([0-9]+)/\1 \0/' | sort -n | tail -1 | awk '{print $2}')
+          else
+            TARGET_BRANCH="${{ github.event.inputs.target_branch }}"
+          fi
+
+          echo "🔁 Comparing '$TARGET_BRANCH' against '$BASE_BRANCH'"
+
+          git fetch origin "$BASE_BRANCH"
+          git fetch origin "$TARGET_BRANCH"
+
           COMMITS=$(git log origin/"$BASE_BRANCH"..origin/"$TARGET_BRANCH" --oneline)
 
           if [[ -z "$COMMITS" ]]; then
@@ -68,24 +67,20 @@ jobs:
               exit 0
           fi
 
-          echo "⚠️ Found commits in '$TARGET_BRANCH' not in '$BASE_BRANCH':"
+          echo "⚠️ Found commits:"
           echo "$COMMITS"
 
           if [[ "$CREATE_ISSUE" == "true" ]]; then
-              echo "📬 Creating GitHub Issue..."
               TITLE="🚨 Unmerged commits from $TARGET_BRANCH into $BASE_BRANCH"
-              BODY="The branch \`$TARGET_BRANCH\` contains commits that are not yet in \`$BASE_BRANCH\`.
+              BODY="The branch \`$TARGET_BRANCH\` contains commits not in \`$BASE_BRANCH\`:
 
-              Commits:
-              \`\`\`
-              $COMMITS
-              \`\`\`
+          \`\`\`
+          $COMMITS
+          \`\`\`
 
           Please check if a merge is needed."
 
-              # Ensure label exists
               if ! gh label list --limit 100 | grep -q '^maintenance-check'; then
-                  echo "🏷️ Creating missing label: maintenance-check"
                   gh label create maintenance-check --color F9D0C4 --description "Created by maintenance-check-action"
               fi
 

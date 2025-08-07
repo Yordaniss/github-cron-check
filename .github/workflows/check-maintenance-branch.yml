@@ -17,6 +17,10 @@ on:
         description: 'Create an issue if changes are found?'
         required: false
         default: 'true'
+        
+permissions:
+  issues: write
+  contents: read
 
 jobs:
   check:
